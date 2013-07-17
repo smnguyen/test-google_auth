@@ -7,6 +7,10 @@ import org.apache.http.client.methods.HttpPost;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.message.BasicNameValuePair;
 
+import org.json.simple.JSONObject;
+import org.json.simple.parser.JSONParser;
+import org.json.simple.parser.ParseException;
+
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
@@ -50,8 +54,9 @@ public class GoogleLoginServlet extends HttpServlet {
 
         // http://www.vogella.com/articles/ApacheHttpClient/article.html
         HttpClient client = new DefaultHttpClient();
-        HttpPost post = new HttpPost(TOKEN_URL);
+        JSONObject tokenJSON;
         try {
+            HttpPost post = new HttpPost(TOKEN_URL);
             List<NameValuePair> nvPairs = new ArrayList<NameValuePair>();
             nvPairs.add(new BasicNameValuePair("code", req.getParameter("code")));
             nvPairs.add(new BasicNameValuePair("client_id", CLIENT_ID));
@@ -60,27 +65,50 @@ public class GoogleLoginServlet extends HttpServlet {
             nvPairs.add(new BasicNameValuePair("grant_type", "authorization_code"));
             post.setEntity(new UrlEncodedFormEntity(nvPairs));
 
-
-
             HttpResponse response = client.execute(post);
-            BufferedReader br = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
-            PrintWriter pageWriter = resp.getWriter();
-            String tokenJSON = "";
-            while (true) {
-                String line = br.readLine();
-                if (line == null) break;
-                tokenJSON += line;
-            }
-            br.close();
-            pageWriter.close();
+            tokenJSON = getJSONResponse(response);
         } catch (IOException e) {
-            e.printStackTrace();
+            resp.getWriter().println("Couldn't get access token & id token");
+            return;
+        } catch (ParseException e) {
+            resp.getWriter().println("Couldn't parse access token & id token");
+            return;
+        }
+
+        if (tokenJSON.containsKey("error")) {
+            resp.getWriter().println("Could not verify your identity");
+            return;
         }
 
         StringBuilder sb = new StringBuilder(TOKEN_INFO_URL);
-        addQueryParameter(sb, "id_token", "");
+        addQueryParameter(sb, "id_token", (String) tokenJSON.get("id_token"));
+        JSONObject idJSON;
+        try {
+            HttpGet get = new HttpGet(sb.toString());
+            HttpResponse response = client.execute(get);
+            idJSON = getJSONResponse(response);
+        } catch (IOException e) {
+            resp.getWriter().println("Couldn't get read id info");
+            return;
+        } catch (ParseException e) {
+            resp.getWriter().println("Couldn't parse id info");
+            return;
+        }
+        resp.getWriter().println(idJSON.toJSONString());
+    }
 
-        HttpGet get = new HttpGet();
+    private JSONObject getJSONResponse(HttpResponse response) throws IOException, ParseException {
+        BufferedReader br = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
+        String json = "";
+        while (true) {
+            String line = br.readLine();
+            if (line == null) break;
+            json += line;
+        }
+        br.close();
+
+        JSONParser parser = new JSONParser();
+        return (JSONObject) parser.parse(json);
     }
 
     @Override

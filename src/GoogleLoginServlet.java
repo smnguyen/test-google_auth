@@ -1,23 +1,35 @@
+import org.apache.http.HttpResponse;
+import org.apache.http.NameValuePair;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.entity.UrlEncodedFormEntity;
+import org.apache.http.client.methods.HttpGet;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.message.BasicNameValuePair;
+
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
-import java.io.IOException;
+import java.io.*;
 import java.math.BigInteger;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.security.SecureRandom;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.ArrayList;
+import java.util.List;
 
 @WebServlet("/google_login")
 public class GoogleLoginServlet extends HttpServlet {
 
     private static final String LOGIN_URL = "https://accounts.google.com/o/oauth2/auth?";
+    private static final String TOKEN_URL = "https://accounts.google.com/o/oauth2/token";
+    private static final String TOKEN_INFO_URL = "https://www.googleapis.com/oauth2/v1/tokeninfo?";
     private static final String CLIENT_ID = "145631744627-c6le22tp15fh6sesd4a9ru4kadiis9oo.apps.googleusercontent.com";
     private static final String CLIENT_SECRET = "-yHzr71gU-TK_eSwnt8tK0Rn";
+    private static final String REDIRECT_URI = "http://localhost:8080/google_auth_war_exploded/google_login";
 
     public GoogleLoginServlet() {
         super();
@@ -36,8 +48,39 @@ public class GoogleLoginServlet extends HttpServlet {
             return;
         }
 
-        String code = req.getParameter("code");
+        // http://www.vogella.com/articles/ApacheHttpClient/article.html
+        HttpClient client = new DefaultHttpClient();
+        HttpPost post = new HttpPost(TOKEN_URL);
+        try {
+            List<NameValuePair> nvPairs = new ArrayList<NameValuePair>();
+            nvPairs.add(new BasicNameValuePair("code", req.getParameter("code")));
+            nvPairs.add(new BasicNameValuePair("client_id", CLIENT_ID));
+            nvPairs.add(new BasicNameValuePair("client_secret", CLIENT_SECRET));
+            nvPairs.add(new BasicNameValuePair("redirect_uri", REDIRECT_URI));
+            nvPairs.add(new BasicNameValuePair("grant_type", "authorization_code"));
+            post.setEntity(new UrlEncodedFormEntity(nvPairs));
 
+
+
+            HttpResponse response = client.execute(post);
+            BufferedReader br = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
+            PrintWriter pageWriter = resp.getWriter();
+            String tokenJSON = "";
+            while (true) {
+                String line = br.readLine();
+                if (line == null) break;
+                tokenJSON += line;
+            }
+            br.close();
+            pageWriter.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        StringBuilder sb = new StringBuilder(TOKEN_INFO_URL);
+        addQueryParameter(sb, "id_token", "");
+
+        HttpGet get = new HttpGet();
     }
 
     @Override
@@ -53,7 +96,7 @@ public class GoogleLoginServlet extends HttpServlet {
         addQueryParameter(sb, "response_type", "code");
         addQueryParameter(sb, "scope", "openid%20email");
         addQueryParameter(sb, "state", URLEncoder.encode(state, "UTF-8"));
-        addQueryParameter(sb, "redirect_uri", currentURL);
+        addQueryParameter(sb, "redirect_uri", REDIRECT_URI);
 
         resp.sendRedirect(sb.toString());
     }

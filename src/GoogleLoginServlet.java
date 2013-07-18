@@ -1,15 +1,7 @@
-import org.apache.http.HttpResponse;
-import org.apache.http.NameValuePair;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.entity.UrlEncodedFormEntity;
-import org.apache.http.client.methods.HttpGet;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.message.BasicNameValuePair;
-
-import org.json.simple.JSONObject;
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.ParseException;
+import com.google.api.client.googleapis.auth.oauth2.*;
+import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.gson.GsonFactory;
+import org.apache.commons.codec.binary.Base64;
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
@@ -19,24 +11,26 @@ import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 import java.io.*;
 import java.math.BigInteger;
-import java.net.URL;
-import java.net.URLEncoder;
+import java.security.GeneralSecurityException;
 import java.security.SecureRandom;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Arrays;
 
 @WebServlet("/google_login")
 public class GoogleLoginServlet extends HttpServlet {
 
-    private static final String LOGIN_URL = "https://accounts.google.com/o/oauth2/auth?";
-    private static final String TOKEN_URL = "https://accounts.google.com/o/oauth2/token";
-    private static final String TOKEN_INFO_URL = "https://www.googleapis.com/oauth2/v1/tokeninfo?";
     private static final String CLIENT_ID = "145631744627-c6le22tp15fh6sesd4a9ru4kadiis9oo.apps.googleusercontent.com";
     private static final String CLIENT_SECRET = "-yHzr71gU-TK_eSwnt8tK0Rn";
     private static final String REDIRECT_URI = "http://localhost:8080/google_auth_war_exploded/google_login";
 
+    private GsonFactory gf = new GsonFactory();
+    private NetHttpTransport nht = new NetHttpTransport();
+    private GoogleAuthorizationCodeTokenRequest tokenRequest;
+    private GoogleIdTokenVerifier verifier;
+
     public GoogleLoginServlet() {
         super();
+        verifier = new GoogleIdTokenVerifier.Builder(nht, gf).build();
+        tokenRequest = new GoogleAuthorizationCodeTokenRequest(nht, gf, CLIENT_ID, CLIENT_SECRET, "", REDIRECT_URI);
     }
 
     @Override
@@ -52,104 +46,53 @@ public class GoogleLoginServlet extends HttpServlet {
             return;
         }
 
-        // http://www.vogella.com/articles/ApacheHttpClient/article.html
-        HttpClient client = new DefaultHttpClient();
-        JSONObject tokenJSON;
+        PrintWriter writer = resp.getWriter();
+        String idToken = null;
         try {
-            HttpPost post = new HttpPost(TOKEN_URL);
-            List<NameValuePair> nvPairs = new ArrayList<NameValuePair>();
-            nvPairs.add(new BasicNameValuePair("code", req.getParameter("code")));
-            nvPairs.add(new BasicNameValuePair("client_id", CLIENT_ID));
-            nvPairs.add(new BasicNameValuePair("client_secret", CLIENT_SECRET));
-            nvPairs.add(new BasicNameValuePair("redirect_uri", REDIRECT_URI));
-            nvPairs.add(new BasicNameValuePair("grant_type", "authorization_code"));
-            post.setEntity(new UrlEncodedFormEntity(nvPairs));
-
-            HttpResponse response = client.execute(post);
-            tokenJSON = getJSONResponse(response);
-        } catch (IOException e) {
-            resp.getWriter().println("Couldn't get access token & id token");
-            return;
-        } catch (ParseException e) {
-            resp.getWriter().println("Couldn't parse access token & id token");
-            return;
-        }
-
-        if (tokenJSON.containsKey("error")) {
-            resp.getWriter().println("Could not verify your identity");
+            tokenRequest.setCode(req.getParameter("code"));
+            GoogleTokenResponse token = tokenRequest.execute();
+            idToken = token.getIdToken(); // .getIdToken() is in beta?
+            GoogleIdToken gIDt = verifier.verify(idToken);
+            if (gIDt == null) {
+                writer.println("Invalid token");
+                return;
+            }
+            writer.println("ID token: " + idToken + "\n");
+            writer.println("Your email is " + gIDt.getPayload().getEmail());
+            String verified = gIDt.getPayload().getEmailVerified() ? "" : "not ";
+            writer.println("Your email has " + verified + "been verified" + "\n");   // bug on Google's end?
+        } catch (GeneralSecurityException gse) {
+            // ignore?
+        } catch (IOException ioe) {
+            writer.println(ioe);
+            writer.println("Could not verify your identity");
             return;
         }
 
-        StringBuilder sb = new StringBuilder(TOKEN_INFO_URL);
-        addQueryParameter(sb, "id_token", (String) tokenJSON.get("id_token"));
-        JSONObject idJSON;
-        try {
-            HttpGet get = new HttpGet(sb.toString());
-            HttpResponse response = client.execute(get);
-            idJSON = getJSONResponse(response);
-        } catch (IOException e) {
-            resp.getWriter().println("Couldn't get read id info");
-            return;
-        } catch (ParseException e) {
-            resp.getWriter().println("Couldn't parse id info");
-            return;
-        }
+        // decoding the ID token manually
+        String[] tokenParts = idToken.split("\\.");   // split on period
+        byte[] decodedAlg = Base64.decodeBase64(tokenParts[0]);
+        byte[] decodedUser = Base64.decodeBase64(tokenParts[1]);
+        writer.println(new String(decodedUser, "UTF-8"));
+        writer.println(new String(decodedAlg, "UTF-8"));
 
-        resp.getWriter().println("Your email is " + idJSON.get("email"));
-        String verified = (Boolean) idJSON.get("email_verified") ? "" : "not ";
-        resp.getWriter().println("Your email has " + verified + "been verified");
-    }
-
-    private JSONObject getJSONResponse(HttpResponse response) throws IOException, ParseException {
-        BufferedReader br = new BufferedReader(new InputStreamReader(response.getEntity().getContent()));
-        String json = "";
-        while (true) {
-            String line = br.readLine();
-            if (line == null) break;
-            json += line;
-        }
-        br.close();
-
-        JSONParser parser = new JSONParser();
-        return (JSONObject) parser.parse(json);
+        /* more info: http://www.tbray.org/ongoing/When/201x/2013/04/04/ID-Tokens */
     }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
         HttpSession session = req.getSession();
         String securityToken = new BigInteger(130, new SecureRandom()).toString(32); // token to prevent forgery
-        String currentURL = getFullURL(req);
-        String state = String.format("security_token=%s&url=%s", securityToken, currentURL);
+        String state = String.format("security_token=%s&url=%s", securityToken, REDIRECT_URI);
         session.setAttribute("state", state);
 
-        StringBuilder sb = new StringBuilder(LOGIN_URL);
-        addQueryParameter(sb, "client_id", CLIENT_ID);
-        addQueryParameter(sb, "response_type", "code");
-        addQueryParameter(sb, "scope", "openid%20email");
-        addQueryParameter(sb, "state", URLEncoder.encode(state, "UTF-8"));
-        addQueryParameter(sb, "redirect_uri", REDIRECT_URI);
+        GoogleAuthorizationCodeRequestUrl urlBuilder = new GoogleAuthorizationCodeRequestUrl(
+                CLIENT_ID,
+                REDIRECT_URI,
+                Arrays.asList("openid", "email"))
+                .setState(state)
+                .setResponseTypes(Arrays.asList("code"));
 
-        resp.sendRedirect(sb.toString());
-    }
-
-    private void addQueryParameter(StringBuilder sb, String key, String value) {
-        sb.append(key);
-        sb.append('=');
-        sb.append(value);
-        sb.append('&');
-    }
-
-    // http://www.jguru.com/faq/view.jsp?EID=35175
-    private String getFullURL(HttpServletRequest req) {
-        String file = req.getRequestURI();
-        if (req.getQueryString() != null) {
-            file += '?' + req.getQueryString();
-        }
-        try {
-            URL url = new URL(req.getScheme(), req.getServerName(), req.getServerPort(), file);
-            return url.toString();
-        } catch (Exception e) {
-            return "http://www.comprehend.com";
-        }
+        resp.sendRedirect(urlBuilder.build());
     }
 }

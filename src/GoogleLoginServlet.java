@@ -94,7 +94,10 @@ public class GoogleLoginServlet extends HttpServlet {
             resp.getWriter().println("Couldn't parse id info");
             return;
         }
-        resp.getWriter().println(idJSON.toJSONString());
+
+        resp.getWriter().println("Your email is " + idJSON.get("email"));
+        String verified = (Boolean) idJSON.get("email_verified") ? "" : "not ";
+        resp.getWriter().println("Your email has " + verified + "been verified");
     }
 
     private JSONObject getJSONResponse(HttpResponse response) throws IOException, ParseException {
